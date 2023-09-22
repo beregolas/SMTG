@@ -1,8 +1,9 @@
+import operator
 
 ESCAPE = "\\"
 
 
-def find_all(text, substring):
+def _find_all(text, substring):
     """
     Returns a list of all indices of the substring in the text.
     """
@@ -18,7 +19,7 @@ def find_all(text, substring):
     return indices
 
 
-def generate(_template, _features=None,  **kwargs):
+def generate(_template, _features=None, **kwargs):
     errors = []
     if _features is None:
         _features = [
@@ -28,43 +29,50 @@ def generate(_template, _features=None,  **kwargs):
 
     if "if" in _features:
         # evaluate if statements
-        index = text.find("{?")
-        while index != -1:
-            if text[index - 1] == ESCAPE:
-                index = text.find("{?", index + 1)
-                continue
-
-            end_index = text.find("?}", index)
-            if end_index == -1:
-                errors.append("Missing ?}} for {{? at index {}".format(index))
-                break
-            while text[end_index - 1] == ESCAPE:
-                end_index = text.find("{?", end_index + 1)
-                if end_index == -1:
-                    errors.append("Missing ?}} for {{? at index {}".format(index))
-                    break
-                continue
-
-            condition_statement = text[index + 2:end_index].strip()
-
-            try:
-                condition, then, *rest = condition_statement.split("|")
-            except ValueError:
-                errors.append("Invalid if statement at index {}".format(index))
-                break
-
-            if eval(condition, kwargs):
-                text = text[:index] + then + text[end_index + 2:]
-            else:
-                if len(rest) > 0:
-                    text = text[:index] + rest[0] + text[end_index + 2:]
-                else:
-                    errors.append("Missing else statement for {{? at index {}".format(index))
-
-        pass
+        indices_open = _find_all(text, "{?")
+        indices_close = _find_all(text, "?}")
+        indices_delimiter = _find_all(text, "|")
+        while len(indices_open) > 0:
+            indices_list = [(index, "{?") for index in indices_open] + [(index, "?}") for index in indices_close] + [
+                (index, "|") for index in indices_delimiter]
+            indices_list.sort(key=operator.itemgetter(0))
+            if len(indices_open) != len(indices_close):
+                errors.append("Number of {? and ?} does not match")
+            if indices_list[0][1] != "{?":
+                errors.append("First statement is not an if statement opening")
+            # find first opening if statement
+            index_open = indices_open[0]
+            # find corresponding closing if statement and delimiters
+            level = 1
+            index = 1
+            delimiters = []
+            while level > 0 and index < len(indices_list):
+                if indices_list[index][1] == "{?":
+                    level += 1
+                elif indices_list[index][1] == "?}":
+                    level -= 1
+                elif indices_list[index][1] == "|":
+                    if level == 1:
+                        delimiters.append(indices_list[index][0])
+                index += 1
+            if len(delimiters) == 0 or len(delimiters) > 2:
+                errors.append("If statement at index {} has no or more than 2 delimiters".format(index_open))
+            condition_statement = text[index_open + 2:delimiters[0]].strip()
+            then_statement = text[delimiters[0] + 1:delimiters[1]].strip() \
+                if len(delimiters) == 2 else text[delimiters[0] + 1:].strip()
+            else_statement = text[delimiters[1] + 1:].strip() if len(delimiters) == 2 else ""
+            # replace relevant of the statement
+            if eval(condition_statement, kwargs):
+                text = text[:index_open] + then_statement + text[indices_close[0] + 2:]
+            elif else_statement != "":
+                text = text[:index_open] + else_statement + text[indices_close[0] + 2:]
+            # recompute indices
+            indices_open = _find_all(text, "{?")
+            indices_close = _find_all(text, "?}")
+            indices_delimiter = _find_all(text, "|")
 
     if "eval" in _features:
-        #evaluate eval statements
+        # evaluate eval statements
         index = text.find("{{")
         while index != -1:
             if text[index - 1] == ESCAPE:
@@ -90,7 +98,8 @@ def generate(_template, _features=None,  **kwargs):
                 break
         pass
 
-    print(errors)
+    if len(errors) > 0:
+        raise ValueError("There are {} errors: \n".format(len(errors)) + "\n".join(errors))
     return text
 
 
@@ -103,5 +112,6 @@ class User:
 
 if __name__ == "__main__":
     print(generate(
-        "{? x > 5 | x is greater than 5 | x is less than 5 ?}, Also der Name des Teilnehmers ist {{user.name}}", x=2, user=User(name="Hans")
+        "{? x > 5 | x is greater than 5 | x is less than 5 ?}, Also der "
+        "Name des Teilnehmers ist {{user}}", x=2, user="Hans-Dieter"
     ))
